@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiwf_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aiwf
+      POSTGRES_PASSWORD: aiwf_secret
+      POSTGRES_DB: aiwf_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiwf -d aiwf_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiwf_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aiwf_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://aiwf:aiwf_secret@postgres:5432/aiwf_db
+      REDIS_URL: redis://redis:6379
+      PORT: 4000
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./backend/logs:/app/logs
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aiwf_worker
+    restart: unless-stopped
+    command: node dist/queue/worker.js
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://aiwf:aiwf_secret@postgres:5432/aiwf_db
+      REDIS_URL: redis://redis:6379
+      WORKER_MODE: "true"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aiwf_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: http://localhost:4000
+      VITE_WS_URL: ws://localhost:4000
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,1 @@
+{"version":3,"file":"branch-node.d.ts","sourceRoot":"","sources":["../../../src/engine/node-executors/branch-node.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,gBAAgB,EAAE,gBAAgB,EAAE,UAAU,EAAE,MAAM,UAAU,CAAC;AAK1E,wBAAsB,iBAAiB,CACrC,IAAI,EAAE,gBAAgB,EACtB,GAAG,EAAE,gBAAgB,GACpB,OAAO,CAAC,UAAU,CAAC,CAmCrB"}

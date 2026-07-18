@@ -1,0 +1,260 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// MULTI-TENANCY
+// ─────────────────────────────────────────────
+
+model Tenant {
+  id                 String   @id @default(uuid())
+  name               String
+  plan               String   @default("starter") // starter | pro | enterprise
+  llmBudgetTokens    BigInt   @default(1000000) @map("llm_budget_tokens")
+  llmUsedTokens      BigInt   @default(0) @map("llm_used_tokens")
+  apiKeyHash         String?  @unique @map("api_key_hash")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  users              User[]
+  workflows          Workflow[]
+  connectors         Connector[]
+  tokenUsage         TokenUsage[]
+  workflowRuns       WorkflowRun[]
+
+  @@map("tenants")
+}
+
+// ─────────────────────────────────────────────
+// AUTH & USERS
+// ─────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  email        String
+  passwordHash String   @map("password_hash")
+  name         String
+  role         UserRole @default(VIEWER)
+  refreshToken String?  @map("refresh_token")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  humanTasks   HumanTask[]  @relation("AssignedTasks")
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  VIEWER
+  APPROVER
+}
+
+// ─────────────────────────────────────────────
+// WORKFLOW DEFINITIONS (versioned)
+// ─────────────────────────────────────────────
+
+model Workflow {
+  id               String   @id @default(uuid())
+  tenantId         String   @map("tenant_id")
+  name             String
+  description      String?
+  triggerType      TriggerType @default(MANUAL) @map("trigger_type")
+  triggerConfig    Json?    @map("trigger_config") // cron expression, webhook secret, etc.
+  currentVersionId String?  @map("current_version_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  versions         WorkflowVersion[]
+  runs             WorkflowRun[]
+
+  @@map("workflows")
+}
+
+enum TriggerType {
+  MANUAL
+  SCHEDULE
+  WEBHOOK
+  WORKFLOW_OUTPUT
+}
+
+model WorkflowVersion {
+  id          String          @id @default(uuid())
+  workflowId  String          @map("workflow_id")
+  version     Int
+  definition  Json            // The full DAG: { nodes: [], edges: [] }
+  status      VersionStatus   @default(DRAFT)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  publishedAt DateTime?       @map("published_at")
+
+  workflow    Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  runs        WorkflowRun[]
+
+  @@unique([workflowId, version])
+  @@map("workflow_versions")
+}
+
+enum VersionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// ─────────────────────────────────────────────
+// WORKFLOW RUNS (durable state machine)
+// ─────────────────────────────────────────────
+
+model WorkflowRun {
+  id               String    @id @default(uuid())
+  workflowId       String    @map("workflow_id")
+  versionId        String    @map("version_id")
+  tenantId         String    @map("tenant_id")
+  status           RunStatus @default(PENDING)
+  currentNodeId    String?   @map("current_node_id")
+  context          Json      @default("{}") // Accumulated output context (JSONB)
+  triggerPayload   Json?     @map("trigger_payload")
+  errorMessage     String?   @map("error_message")
+  startedAt        DateTime  @default(now()) @map("started_at")
+  completedAt      DateTime? @map("completed_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  workflow         Workflow        @relation(fields: [workflowId], references: [id])
+  version          WorkflowVersion @relation(fields: [versionId], references: [id])
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  events           RunEvent[]
+  humanTasks       HumanTask[]
+  tokenUsage       TokenUsage[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, workflowId])
+  @@map("workflow_runs")
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  WAITING_HUMAN
+  FAILED
+  COMPLETED
+  CANCELLED
+}
+
+// ─────────────────────────────────────────────
+// AUDIT TRAIL (append-only)
+// ─────────────────────────────────────────────
+
+model RunEvent {
+  id        String         @id @default(uuid())
+  runId     String         @map("run_id")
+  nodeId    String?        @map("node_id")
+  type      RunEventType
+  payload   Json           // Structured payload depends on event type
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  run       WorkflowRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@map("run_events")
+}
+
+enum RunEventType {
+  STATE_TRANSITION
+  NODE_STARTED
+  NODE_COMPLETED
+  NODE_FAILED
+  TOOL_CALL
+  TOOL_RESULT
+  AGENT_REASONING
+  AGENT_TOOL_CALL
+  AGENT_RESULT
+  HUMAN_INPUT_REQUESTED
+  HUMAN_INPUT_RECEIVED
+  POLICY_VIOLATION
+  AGENT_DELEGATION
+  ERROR
+}
+
+// ─────────────────────────────────────────────
+// HUMAN-IN-THE-LOOP
+// ─────────────────────────────────────────────
+
+model HumanTask {
+  id           String          @id @default(uuid())
+  runId        String          @map("run_id")
+  nodeId       String          @map("node_id")
+  prompt       String          // What the agent is asking
+  context      Json?           // Relevant context for the approver
+  assignedTo   String?         @map("assigned_to") // User ID or email
+  status       HumanTaskStatus @default(PENDING)
+  response     Json?           // The human's input/decision
+  resolvedAt   DateTime?       @map("resolved_at")
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  run          WorkflowRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  assignee     User?           @relation("AssignedTasks", fields: [assignedTo], references: [id])
+
+  @@map("human_tasks")
+}
+
+enum HumanTaskStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─────────────────────────────────────────────
+// CONNECTOR CREDENTIALS (encrypted at rest)
+// ─────────────────────────────────────────────
+
+model Connector {
+  id                   String   @id @default(uuid())
+  tenantId             String   @map("tenant_id")
+  name                 String
+  type                 String   // slack | gmail | jira | http | sql | etc.
+  encryptedCredentials String   @map("encrypted_credentials") // AES-256-GCM
+  scopes               String[] // Granted OAuth scopes
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@map("connectors")
+}
+
+// ─────────────────────────────────────────────
+// COST / TOKEN TRACKING
+// ─────────────────────────────────────────────
+
+model TokenUsage {
+  id               String   @id @default(uuid())
+  runId            String   @map("run_id")
+  tenantId         String   @map("tenant_id")
+  model            String
+  promptTokens     Int      @map("prompt_tokens")
+  completionTokens Int      @map("completion_tokens")
+  totalTokens      Int      @map("total_tokens")
+  costUsd          Decimal  @map("cost_usd") @db.Decimal(10, 6)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  run              WorkflowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  tenant           Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@map("token_usage")
+}
