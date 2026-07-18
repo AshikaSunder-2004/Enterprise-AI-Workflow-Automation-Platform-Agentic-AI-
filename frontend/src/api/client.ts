@@ -1,4 +1,4 @@
-const BASE_URL = '/api';
+const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 function getToken(): string | null {
   return localStorage.getItem('accessToken');
@@ -160,7 +160,10 @@ export const analyticsApi = {
 
 export function createRunWebSocket(onMessage: (data: unknown) => void): WebSocket {
   const token = getToken();
-  const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws?token=${token}`;
+  const defaultWsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws?token=${token}`;
+  const wsUrl = import.meta.env.VITE_WS_URL
+    ? `${import.meta.env.VITE_WS_URL}?token=${token}`
+    : defaultWsUrl;
   const ws = new WebSocket(wsUrl);
   ws.onmessage = (e) => {
     try { onMessage(JSON.parse(e.data)); } catch {}
