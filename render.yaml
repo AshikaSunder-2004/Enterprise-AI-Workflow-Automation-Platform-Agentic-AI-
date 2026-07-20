@@ -10,29 +10,7 @@ services:
     env: node
     plan: free
     buildCommand: "cd backend && npm install && npm run prisma:generate && npm run build && npx prisma db push --accept-data-loss"
-    startCommand: "cd backend && npm start"
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: aiwf-postgres
-          property: connectionString
-      - key: NODE_ENV
-        value: production
-      - key: JWT_SECRET
-        generateValue: true
-      - key: JWT_REFRESH_SECRET
-        generateValue: true
-      - key: ENCRYPTION_KEY
-        generateValue: true
-      - key: REDIS_URL
-        sync: false # You must provide this in the Render dashboard (e.g. from Upstash)
-
-  - type: worker
-    name: aiwf-worker
-    env: node
-    plan: starter # Note: Background workers do not have a free tier on Render. It costs ~$7/month.
-    buildCommand: "cd backend && npm install && npm run prisma:generate && npm run build"
-    startCommand: "cd backend && npm run start:worker"
+    startCommand: "cd backend && npm run start:worker & cd backend && npm start"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -43,14 +21,10 @@ services:
       - key: WORKER_MODE
         value: "true"
       - key: JWT_SECRET
-        fromService:
-          type: web
-          name: aiwf-api
-          envVarKey: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
       - key: ENCRYPTION_KEY
-        fromService:
-          type: web
-          name: aiwf-api
-          envVarKey: ENCRYPTION_KEY
+        generateValue: true
       - key: REDIS_URL
         sync: false # You must provide this in the Render dashboard (e.g. from Upstash)
